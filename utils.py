@@ -1,67 +1,37 @@
+import matplotlib.pyplot as plt
 import torch
 from tqdm import tqdm
 from torchvision import transforms
-from transformers import PreTrainedTokenizer, PreTrainedModel
-from diffusers import UNet2DConditionModel, AutoencoderKL, SchedulerMixin
-from PIL import Image
+from transformers import PreTrainedTokenizer, PreTrainedModel, CLIPTextModel, CLIPTokenizer
+from diffusers import UNet2DConditionModel, AutoencoderKL, SchedulerMixin, PNDMScheduler
 
+def visualize_grid(images, n_cols=2, figsize_width=8):
+    num_images = len(images)
+    n_rows = (num_images + n_cols - 1) // n_cols 
+    figsize_height = figsize_width * n_rows / n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(figsize_width, figsize_height))
 
-def sd_inference(
-    tokenizer: PreTrainedTokenizer,
-    text_encoder: PreTrainedModel,
-    unet: UNet2DConditionModel,
-    scheduler: SchedulerMixin,
-    vae: AutoencoderKL,
-    text_prompt: str,
-    guidance_scale = 7.5,
-    device="cuda",
-) -> Image:
-    with torch.no_grad():
-        # Tokenize prompt
-        inputs = tokenizer(text_prompt, return_tensors="pt").to(device)
+    for i, img in enumerate(images):
+        row = i // n_cols
+        col = i % n_cols
+        ax = axes[row][col] if n_rows > 1 else axes[col]
+        ax.imshow(img)
+        ax.axis("off")
 
-        # Encode prompt to embedding
-        text_encoder.to(device)
-        text_embeddings = text_encoder(**inputs).last_hidden_state.to(device)
-        
-        max_length = inputs.input_ids.shape[-1]
-        uncond_input = tokenizer([""], padding="max_length", max_length=max_length, return_tensors="pt").to(device)
-        uncond_embeddings = text_encoder(**uncond_input).last_hidden_state.to(device)
+    plt.tight_layout()
+    plt.show()
+    
+def load_models(model_id):
+    tokenizer = CLIPTokenizer.from_pretrained(model_id, subfolder="tokenizer")
+    text_encoder = CLIPTextModel.from_pretrained(model_id, subfolder="text_encoder")
+    unet = UNet2DConditionModel.from_pretrained(model_id, subfolder="unet")
+    vae = AutoencoderKL.from_pretrained(model_id, subfolder="vae")
+    scheduler = PNDMScheduler.from_pretrained(model_id, subfolder="scheduler")
 
-        text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
-        text_encoder.to("cpu")
-
-        # Generate random gaussian noise
-        latents = torch.randn((1, vae.config.latent_channels, 64, 64)).to(device)
-        latents = latents * scheduler.init_noise_sigma
-
-        # Apply diffusion steps
-        unet.to(device)
-        for t in tqdm(scheduler.timesteps):
-            
-            latent_model_input = scheduler.scale_model_input(latents, t)
-            latent_model_input = torch.cat([latent_model_input] * 2)
-
-            noise_pred = unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
-            
-            # A weighted sum of conditional and unconditional embeddings to regulate prompt's influence
-            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-            latents = scheduler.step(noise_pred, t, latents).prev_sample
-        unet.to("cpu")
-
-        # Denormalize latents
-        latents = 1 / vae.config.scaling_factor * latents
-
-        # Project latents to image space
-        vae.to(device)
-        image = vae.decode(latents).sample.cpu()
-        vae.to("cpu")
-        del latents
-        
-        # Denormalize image and convert to PIL
-        image = (image / 2 + 0.5).clamp(0, 1)
-        to_pil = transforms.ToPILImage()
-        final_image = to_pil(image[0].cpu())
-        return final_image
+    return {
+          "tokenizer": tokenizer,
+          "text_encoder": text_encoder,
+          "unet": unet,
+          "scheduler": scheduler,
+          "vae": vae,
+        }
