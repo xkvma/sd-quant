@@ -7,7 +7,7 @@ from .int4 import pack_uint4, unpack_uint4
 
 @torch.no_grad()
 def quantize_model(model: nn.Module, qtype: str, dtype: str, save_path: str):
-    assert qtype in ("linear", "nonlinear")
+    assert qtype in ("linear", "log")
     assert dtype in ("uint8", "uint4")
 
     qstate = {}
@@ -35,7 +35,7 @@ def quantize_model(model: nn.Module, qtype: str, dtype: str, save_path: str):
         else:
             entry["q"] = q.cpu()
 
-        if qtype == "nonlinear":
+        if qtype == "log":
             packed_sign = pack_sign_bits(sign.cpu().to(torch.int8))
             entry["packed_sign"] = packed_sign
             entry["total_elems_sign"] = torch.tensor(sign.numel(), dtype=torch.int64)
@@ -73,7 +73,7 @@ def load_quantized_weights(model: nn.Module, weights_path: str):
         zp = e["zp"].to(device)
         sign = None
         
-        if qtype == "nonlinear":
+        if qtype == "log":
             total_sign = int(e["total_elems_sign"])
             sign = unpack_sign_bits(e["packed_sign"], total_sign, device=device)
             sign = sign.view_as(q)
